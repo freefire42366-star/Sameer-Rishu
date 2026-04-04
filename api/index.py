@@ -1,54 +1,58 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 import requests
 from bs4 import BeautifulSoup
-import re
+import hashlib
 
 app = FastAPI()
 
-def get_headers():
-    return {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+# Configuration
+BASE_URL = "https://100067.connect.garena.com"
+APP_ID = "100067"
 
 @app.get("/")
 def home():
-    return {"msg": "Sameer Free SMS API Active"}
+    return {"status": "Sameer API is Live", "features": ["FF Bind", "Temp Mail", "Free SMS"]}
 
-# 1. Get Free Numbers List
-@app.get("/api/list")
-def list_numbers(country: str = "india"):
-    # Mapping countries to site paths
-    paths = {"india": "India", "usa": "United-States", "uk": "United-Kingdom"}
-    c_path = paths.get(country.lower(), "India")
-    
-    url = f"https://receive-sms-free.cc/Free-{c_path}-Phone-Number/"
-    try:
-        r = requests.get(url, headers=get_headers())
-        soup = BeautifulSoup(r.text, 'html.parser')
-        # Numbers are in specific class
-        num_blocks = soup.find_all('div', class_='number-boxes-item')
-        
-        results = []
-        for block in num_blocks:
-            number = block.find('h4').text.strip()
-            href = block.find('a').get('href')
-            results.append({"number": number, "url": f"https://receive-sms-free.cc{href}"})
-        return {"status": "success", "numbers": results}
-    except:
-        return {"status": "error", "msg": "Site unreachable"}
+# --- FEATURE 1: FF BIND (OTP REQUEST) ---
+@app.get("/api/request")
+def request_otp(token: str, email: str):
+    headers = {"User-Agent": "GarenaMSDK/4.0.39 (M2007J22C; Android 10; en; US;)"}
+    payload = {"app_id": APP_ID, "access_token": token, "email": email, "locale": "en_BD", "region": "BD"}
+    r = requests.post(f"{BASE_URL}/game/account_security/bind:send_otp", data=payload, headers=headers)
+    return r.json()
 
-# 2. Get Messages (OTP)
-@app.get("/api/otp")
-def get_otp(url: str):
-    try:
-        r = requests.get(url, headers=get_headers())
-        soup = BeautifulSoup(r.text, 'html.parser')
-        rows = soup.find_all('div', class_='messagesTableLayout')
-        
-        messages = []
-        for row in rows[:5]:
-            sender = row.find('div', class_='msg-from').text.strip()
-            text = row.find('div', class_='msg-text').text.strip()
-            time = row.find('div', class_='msg-time').text.strip()
-            messages.append({"from": sender, "text": text, "time": time})
-        return {"status": "success", "messages": messages}
-    except:
-        return {"status": "error"}
+# --- FEATURE 2: FF BIND (CONFIRM) ---
+@app.get("/api/confirm")
+def confirm_bind(token: str, email: str, otp: str):
+    headers = {"User-Agent": "GarenaMSDK/4.0.39 (M2007J22C; Android 10; en; US;)"}
+    # Verify OTP
+    v_res = requests.post(f"{BASE_URL}/game/account_security/bind:verify_otp", 
+                          data={"app_id": APP_ID, "access_token": token, "email": email, "otp": otp}, headers=headers).json()
+    return {"status": "done", "garena_res": v_res}
+
+# --- FEATURE 3: FREE SMS LIST ---
+@app.get("/api/sms-list")
+def sms_list(country: str = "India"):
+    url = f"https://receive-sms-free.cc/Free-{country}-Phone-Number/"
+    r = requests.get(url)
+    soup = BeautifulSoup(r.text, 'html.parser')
+    nums = soup.find_all('div', class_='number-boxes-item')
+    results = []
+    for n in nums[:10]:
+        val = n.find('h4').text.strip()
+        link = n.find('a').get('href')
+        results.append({"number": val, "url": f"https://receive-sms-free.cc{link}"})
+    return results
+
+# --- FEATURE 4: SMS INBOX ---
+@app.get("/api/sms-inbox")
+def sms_inbox(url: str):
+    r = requests.get(url)
+    soup = BeautifulSoup(r.text, 'html.parser')
+    rows = soup.find_all('div', class_='messagesTableLayout')
+    msgs = []
+    for row in rows[:5]:
+        sender = row.find('div', class_='msg-from').text.strip()
+        text = row.find('div', class_='msg-text').text.strip()
+        msgs.append({"from": sender, "text": text})
+    return msgs
