@@ -1,19 +1,19 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 import requests
 import hashlib
 
 app = FastAPI()
 
-# Garena Configuration
+# --- Configuration (From your url.py & endpoint.json) ---
 BASE_URL = "https://100067.connect.garena.com"
 APP_ID = "100067"
-SEC_CODE = "123456" # Fixed per your request
+DEFAULT_SEC_CODE = "123456" # Jo tune manga tha
 
 def sha256_hash(s: str):
     return hashlib.sha256(s.encode()).hexdigest()
 
-def get_headers(request: Request):
-    # Jo mobile link kholi hai uska real user-agent uthayega
+def get_real_headers(request: Request):
+    # Jis mobile mein link khulegi, uska real signature/agent uthayega
     ua = request.headers.get("user-agent", "GarenaMSDK/4.0.39 (M2007J22C; Android 10; en; US;)")
     return {
         "User-Agent": ua,
@@ -23,79 +23,76 @@ def get_headers(request: Request):
     }
 
 @app.get("/")
-def home():
-    return {"msg": "Sameer Auto-Identity API Active (BD Server)"}
+def status():
+    return {"msg": "Sameer Real Garena Engine Active"}
 
-# --- STEP 1: SEND OTP ---
+# [API 1: SEND OTP] - Using /game/account_security/bind:send_otp
 @app.get("/api/request")
 async def send_otp(token: str, email: str, request: Request):
-    headers = get_headers(request)
+    headers = get_real_headers(request)
     payload = {
         "app_id": APP_ID,
         "access_token": token,
         "email": email,
-        "locale": "en_BD",
-        "region": "BD"
+        "locale": "en_BD", # Real BD Server parameter
+        "region": "BD"     # Real BD Server parameter
     }
     r = requests.post(f"{BASE_URL}/game/account_security/bind:send_otp", data=payload, headers=headers)
     return r.json()
 
-# --- STEP 2: CONFIRM (AUTO-IDENTITY) ---
+# [API 2: CONFIRM BIND] - The Multi-Step Logic
 @app.get("/api/confirm")
 async def confirm(token: str, email: str, otp: str, request: Request):
-    headers = get_headers(request)
+    headers = get_real_headers(request)
     
-    # 1. Sabse pehle check karo account par mail hai ya nahi
-    info_res = requests.get(f"{BASE_URL}/game/account_security/bind:get_bind_info", 
-                            params={"app_id": APP_ID, "access_token": token}, headers=headers).json()
-    has_mail = True if info_res.get("email") else False
+    # 1. Pehle Bind Info check karo (Endpoint: bind:get_bind_info)
+    info = requests.get(f"{BASE_URL}/game/account_security/bind:get_bind_info", 
+                        params={"app_id": APP_ID, "access_token": token}, headers=headers).json()
+    is_rebind = True if info.get("email") else False
 
-    # 2. OTP Verify karke Verifier Token lo
+    # 2. OTP Verify karke Verifier Token lo (Endpoint: bind:verify_otp)
     v_payload = {"app_id": APP_ID, "access_token": token, "email": email, "otp": otp}
     v_res = requests.post(f"{BASE_URL}/game/account_security/bind:verify_otp", data=v_payload, headers=headers).json()
-    verifier_token = v_res.get("verifier_token")
+    v_token = v_res.get("verifier_token")
 
-    if not verifier_token:
-        return {"status": "error", "msg": "OTP Galat hai", "garena_res": v_res}
+    if not v_token:
+        return {"error": "OTP_INVALID", "garena_res": v_res}
 
-    # 3. AUTO IDENTITY: Garena se Identity Token maango (Identity verification)
-    # Yeh background mein khud Identity Token mangwayega
-    id_payload = {
-        "app_id": APP_ID,
-        "access_token": token,
-        "secondary_password": sha256_hash(SEC_CODE)
-    }
-    id_res = requests.post(f"{BASE_URL}/game/account_security/bind:verify_identity", data=id_payload, headers=headers).json()
-    identity_token = id_res.get("identity_token")
-
-    # 4. Final Binding
-    if has_mail:
-        # REBIND FLOW (Identity Token must be sent)
-        if not identity_token:
-            return {"status": "error", "msg": "Auto Identity Token Failed", "details": id_res}
-        
-        final_payload = {
+    # 3. IDENTITY TOKEN GENERATION (Endpoint: bind:verify_identity)
+    # Bina user se mange, API khud security code 123456 se identity token nikalegi
+    id_token = None
+    if is_rebind:
+        id_payload = {
             "app_id": APP_ID,
             "access_token": token,
-            "identity_token": identity_token,
-            "verifier_token": verifier_token,
-            "email": email
+            "secondary_password": sha256_hash(DEFAULT_SEC_CODE)
+        }
+        id_res = requests.post(f"{BASE_URL}/game/account_security/bind:verify_identity", data=id_payload, headers=headers).json()
+        id_token = id_res.get("identity_token")
+        
+        if not id_token:
+            return {"error": "IDENTITY_FAILED", "msg": "Security code 123456 correct nahi hai", "res": id_res}
+
+    # 4. FINAL REQUEST (Endpoint: create_bind ya create_rebind)
+    if is_rebind:
+        # Rebind logic
+        final_payload = {
+            "app_id": APP_ID, "access_token": token, "identity_token": id_token,
+            "verifier_token": v_token, "email": email
         }
         endpoint = "/game/account_security/bind:create_rebind_request"
     else:
-        # NEW BIND FLOW (Identity Token NOT sent to avoid error_params)
+        # New Bind logic
         final_payload = {
-            "app_id": APP_ID,
-            "access_token": token,
-            "verifier_token": verifier_token,
-            "email": email
+            "app_id": APP_ID, "access_token": token, "verifier_token": v_token, "email": email
         }
         endpoint = "/game/account_security/bind:create_bind_request"
 
-    # Garena ko final request bhejo
-    r = requests.post(f"{BASE_URL}{endpoint}", data=final_payload, headers=headers)
+    # Garena ko request bhej di
+    final_res = requests.post(f"{BASE_URL}{endpoint}", data=final_payload, headers=headers).json()
+    
     return {
-        "action": "REBIND" if has_mail else "NEW_BIND",
-        "identity_token_used": True if identity_token else False,
-        "garena_response": r.json()
-    }
+        "status": "Success" if final_res.get("result") == 0 else "Failed",
+        "action": "REBIND" if is_rebind else "NEW_BIND",
+        "garena_raw": final_res
+                                              }url.py
