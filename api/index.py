@@ -8,7 +8,7 @@ BASE_URL = "https://100067.connect.garena.com"
 APP_ID = "100067"
 
 def get_msdk_headers(request: Request):
-    # Asli Mobile Signature simulation
+    # Capture user's mobile signature
     ua = request.headers.get("user-agent", "GarenaMSDK/4.0.39 (M2007J22C; Android 10; en; US;)")
     return {
         "User-Agent": ua,
@@ -19,9 +19,9 @@ def get_msdk_headers(request: Request):
 
 @app.get("/")
 def home():
-    return {"status": "Sameer en_PK Engine Live", "mode": "New Bind"}
+    return {"status": "Sameer Real-Response API Live", "mode": "en_PK / PK"}
 
-# ================= STEP 1: SEND OTP (Using en_PK / PK) =================
+# ================= STEP 1: SEND OTP (Real Response) =================
 @app.get("/api/request")
 async def request_otp(token: str, email: str, request: Request):
     headers = get_msdk_headers(request)
@@ -29,61 +29,43 @@ async def request_otp(token: str, email: str, request: Request):
         "app_id": APP_ID,
         "access_token": token,
         "email": email,
-        "locale": "en_PK", # Jaisa tune kaha, Pakistani locale
-        "region": "PK"     # Jaisa tune kaha, Pakistani region
+        "locale": "en_PK", # Pakistani Locale
+        "region": "PK"      # Pakistani Region
     }
     
-    # Hit Garena OTP API
-    try:
-        requests.post(f"{BASE_URL}/game/account_security/bind:send_otp", data=payload, headers=headers)
-    except:
-        pass
-        
-    # Hamesha success dikhayega (Logic as per your request)
-    return {
-        "result": 0,
-        "msg": f"OTP successfully sent to {email}",
-        "params_used": "en_PK / PK"
-    }
+    # Hit Garena
+    r = requests.post(f"{BASE_URL}/game/account_security/bind:send_otp", data=payload, headers=headers)
+    return r.json() # Asli response dikhayega (Success ya Error)
 
-# ================= STEP 2: VERIFY & CONFIRM BIND (Direct New Bind) =================
+# ================= STEP 2: VERIFY & CONFIRM (Real Action) =================
 @app.get("/api/confirm")
 async def confirm_bind(token: str, email: str, otp: str, request: Request):
     headers = get_msdk_headers(request)
     
-    # A. Verify OTP (verifier_token nikalne ke liye)
+    # 1. Verify OTP and get Verifier Token
     v_payload = {
         "app_id": APP_ID,
         "access_token": token,
         "email": email,
         "otp": otp
     }
-    
-    v_token = ""
-    try:
-        v_res = requests.post(f"{BASE_URL}/game/account_security/bind:verify_otp", data=v_payload, headers=headers).json()
-        v_token = v_res.get("verifier_token")
-    except:
-        pass
+    v_resp = requests.post(f"{BASE_URL}/game/account_security/bind:verify_otp", data=v_payload, headers=headers).json()
+    v_token = v_resp.get("verifier_token")
 
-    # B. Final Bind Request (create_bind_request)
-    # Note: New account hai isliye identity_token nahi jayega
+    # Agar OTP galat hai toh yahi ruk jayega aur asli error dikhayega
+    if not v_token:
+        return {"success": False, "msg": "OTP Verification Failed", "garena_error": v_resp}
+
+    # 2. Final Bind Request (create_bind_request)
+    # Identity token isme nahi lagega kyunki ye NEW BIND hai
     bind_payload = {
         "app_id": APP_ID,
         "access_token": token,
-        "verifier_token": v_token if v_token else "null",
+        "verifier_token": v_token,
         "email": email
     }
     
-    try:
-        requests.post(f"{BASE_URL}/game/account_security/bind:create_bind_request", data=bind_payload, headers=headers)
-    except:
-        pass
-
-    # Success Force (Garena response kuch bhi ho, result 0 aayega)
-    return {
-        "result": 0,
-        "status": "success",
-        "msg": "Account Bind Confirmed",
-        "action": "NEW_BIND_FORCE"
-        }
+    final_r = requests.post(f"{BASE_URL}/game/account_security/bind:create_bind_request", data=bind_payload, headers=headers)
+    
+    # Asli Garena Response return karega
+    return final_r.json()
